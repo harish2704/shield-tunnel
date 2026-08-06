@@ -169,7 +169,7 @@ func (s *serverSession) register(mapping string) {
 		s.mu.Unlock()
 		return // already listening
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", s.bindHost, rp))
+	ln, err := net.Listen("tcp", net.JoinHostPort(s.bindHost, strconv.Itoa(rp)))
 	if err != nil {
 		s.mu.Unlock()
 		log.Printf("[server] bind remotePort %d failed: %s", rp, err)

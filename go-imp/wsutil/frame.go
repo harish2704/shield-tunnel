@@ -36,7 +36,7 @@ func xorMaskInPlace(b, key []byte) {
 // WriteFrame writes one FIN WebSocket frame to w. If mask is true the payload is
 // masked with a random 4-byte key (required for client->server frames).
 func WriteFrame(w io.Writer, opcode byte, payload []byte, mask bool) error {
-	var hdr [1 + 8 + 4]byte
+	var hdr [14]byte // 1 (b0) + 1 (b1) + 8 (len64) + 4 (mask) = max 14
 	n := 0
 	hdr[0] = 0x80 | opcode // FIN=1
 	n++

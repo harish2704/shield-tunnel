@@ -56,7 +56,7 @@ func runClientSession(ctx context.Context, cfg ClientConfig) error {
 	}
 	log.Printf("[client] connecting to %s ...", cfg.URL)
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	var conn net.Conn
 	if scheme == "wss" {
 		tlsConf := &tls.Config{ServerName: host}
