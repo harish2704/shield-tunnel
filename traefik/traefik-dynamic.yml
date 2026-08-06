@@ -1,0 +1,62 @@
+# Traefik dynamic config for the ssh-over-TLS reverse tunnel.
+#
+# The client connects to wss://tunnel.example.com/tunnel (port 443).
+# Traefik terminates TLS and forwards the WebSocket upgrade to the local
+# tunnel_server.py listening on 127.0.0.1:8000.
+#
+# Traefik proxies WebSocket upgrades automatically -- no special setting is
+# needed for that. It also forwards custom headers (e.g. X-Tunnel-Secret) by
+# default, so the server-side secret check still works behind Traefik.
+#
+# IMPORTANT for scaling: each client must stay pinned to ONE backend instance
+# for the lifetime of its multiplexed connection. If you run a single
+# tunnel_server instance (recommended), no sticky session is required. If you
+# run several, uncomment the `sticky` block below so all of a client's frames
+# land on the same backend.
+
+http:
+  routers:
+    tunnel-router:
+      rule: "Host(`tunnel.example.com`) && PathPrefix(`/tunnel`)"
+      entryPoints:
+        - websecure
+      service: tunnel-service
+      tls:
+        certResolver: myresolver   # adjust to your ACME resolver name
+      # Optional: add BasicAuth as defence-in-depth on top of X-Tunnel-Secret.
+      # middlewares:
+      #   - tunnel-auth
+
+  services:
+    tunnel-service:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8000"
+        passHostHeader: true
+        # Uncomment ONLY if you run more than one tunnel_server instance:
+        # sticky:
+        #   cookie:
+        #     name: tunnel_backend
+        #     secure: true
+        #     httpOnly: true
+
+  # middlewares:
+  #   tunnel-auth:
+  #     basicAuth:
+  #       users:
+  #         - "tunnel:$apr1$..."
+
+# Optional: HTTP -> HTTPS redirect for the tunnel host
+# http:
+#   routers:
+#     tunnel-router-http:
+#       rule: "Host(`tunnel.example.com`) && PathPrefix(`/tunnel`)"
+#       entryPoints:
+#         - web
+#       middlewares:
+#         - redirect-to-https
+#   middlewares:
+#     redirect-to-https:
+#       redirectScheme:
+#         scheme: https
+#         permanent: true
