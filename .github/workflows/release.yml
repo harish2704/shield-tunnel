@@ -1,10 +1,28 @@
 name: release
 
-on:
-  push:
-    tags:
-      - '*'
+# Builds cross-platform Go binaries and attaches them to a GitHub Release.
+#
+# Triggers:
+#   - release: published  -> runs automatically when you publish a release.
+#   - workflow_dispatch    -> run manually (Actions tab -> "Run workflow"),
+#                             supply the tag (e.g. v0.1.0) to build/attach
+#                             binaries to an ALREADY-published release. This is
+#                             how you backfill binaries for v0.1.0 / v0.1.1.
 
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build & attach assets to (e.g. v0.1.0)'
+        required: true
+
+# The upload step needs to write to the release (GitHub's default token
+# permission is read-only since 2023).
+permissions:
+  contents: write
 
 jobs:
   test:
@@ -12,6 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version: '1.21'
@@ -23,61 +43,75 @@ jobs:
           go test ./...
 
   build:
-    name: Build
+    name: Build & release
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+
       - name: Build all targets
         run: |
           set -e
           cd go-imp
           mkdir -p ../dist/staging
 
-          # -- 32- & 64-bit x86, x86_64, arm64 ---------------------------------
-          for goos in linux windows darwin; do
-          for goarch in amd64 arm64 386; do
-            case "$goos-$goarch" in
-              darwin-386)    continue ;;   # macOS never shipped on 32-bit x86
-              windows-arm64) continue ;;   # no windows/arm64 builder in Go 1.21
+          archive() {
+            # $1 = staging dir name, $2 = output basename (no extension)
+            dir="$1"; out="$2"
+            case "$out" in
+              *windows*) ( cd ../dist/staging && zip -r "../${out}.zip"   "$dir" ) ;;
+              *         ) ( cd ../dist/staging && tar czf "../${out}.tar.gz" "$dir" ) ;;
             esac
-            ext=""
-            [ "$goos" = "windows" ] && ext=".exe"
-            dir="${goos}-${goarch}"
-            mkdir -p "../dist/staging/$dir"
+          }
 
+          build_pair() {
+            # $1=goos $2=goarch $3=dirname $4=outname
+            goos="$1"; goarch="$2"; dir="$3"; out="$4"
+            ext=""; [ "$goos" = "windows" ] && ext=".exe"
+            mkdir -p "../dist/staging/$dir"
             GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
               go build -ldflags="-s -w" -o "../dist/staging/$dir/tunnel-server${ext}" ./cmd/tunnel-server
             GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
               go build -ldflags="-s -w" -o "../dist/staging/$dir/tunnel-client${ext}" ./cmd/tunnel-client
-
             cp ../README.md "../dist/staging/$dir/" 2>/dev/null || true
-            (cd ../dist/staging && tar czf "../tunnel-${goos}-${goarch}.tar.gz" "$dir")
-          done
+            archive "$dir" "$out"
+          }
+
+          # 32- & 64-bit x86 (amd64/386) and arm64, for linux/windows/darwin.
+          for goos in linux windows darwin; do
+            for goarch in amd64 arm64 386; do
+              case "$goos-$goarch" in
+                darwin-386) continue ;;   # Go dropped darwin/386 in 1.15
+              esac
+              build_pair "$goos" "$goarch" "${goos}-${goarch}" "tunnel-${goos}-${goarch}"
+            done
           done
 
-          # -- arm32 (ARMv7 / ARMv6, e.g. Raspberry Pi) -----------------------
+          # arm32 (ARMv7 / ARMv6) — Raspberry Pi and other embedded Linux.
           for goarm in 6 7; do
-            dir="linux-armv${goarm}"
+            dir="linux-armv${goarm}"; out="tunnel-linux-armv${goarm}"
             mkdir -p "../dist/staging/$dir"
-
             GOOS=linux GOARCH=arm GOARM="$goarm" CGO_ENABLED=0 \
               go build -ldflags="-s -w" -o "../dist/staging/$dir/tunnel-server" ./cmd/tunnel-server
             GOOS=linux GOARCH=arm GOARM="$goarm" CGO_ENABLED=0 \
               go build -ldflags="-s -w" -o "../dist/staging/$dir/tunnel-client" ./cmd/tunnel-client
-
             cp ../README.md "../dist/staging/$dir/" 2>/dev/null || true
-            (cd ../dist/staging && tar czf "../tunnel-linux-armv${goarm}.tar.gz" "$dir")
+            archive "$dir" "$out"
           done
 
-          echo "Built:"
-          ls -lh ../dist/tunnel-*.tar.gz
-      - name: Upload release artifacts
+          echo "Built artifacts:"
+          ls -lh ../dist/tunnel-*
+
+      - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/tunnel-*.tar.gz
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+          tag_name: ${{ inputs.tag || github.event.release.tag_name }}
+          files: |
+            dist/tunnel-*.tar.gz
+            dist/tunnel-*.zip
